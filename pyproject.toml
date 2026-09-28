@@ -1,0 +1,85 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tradingbot"
+version = "0.1.0"
+description = "A professional-grade Mathematical Trading Bot and backtesting research system"
+readme = "README.md"
+authors = [
+    { name = "Quantitative Engineering Team" }
+]
+license = { text = "MIT" }
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+requires-python = ">=3.10"
+dependencies = [
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "matplotlib>=3.5.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "mypy>=1.8.0",
+    "ruff>=0.4.0",
+    "types-python-dateutil",
+]
+
+[project.scripts]
+tradingbot = "tradingbot.cli:main"
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q"
+testpaths = [
+    "tests",
+]
+
+[tool.coverage.run]
+source = ["src/tradingbot"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+precision = 1
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+no_strict_optional = true
+warn_unused_ignores = false
+exclude = ["build", "dist"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "B", "UP"]
+ignore = [
+    "E501",  # line length handled by formatter settings; legacy long docstrings
+    "N805",  # dataclass first-arg validators
+    "B008",  # default factory calls in dataclasses
+    "UP007", # keep Optional[...] style for 3.10 compatibility
+    "UP045", # keep Optional[...] style for 3.10 compatibility
+    "UP006", # keep typing.List/Dict style for 3.10 compatibility
+    "UP035", # keep typing imports for 3.10 compatibility
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["tradingbot*"]
