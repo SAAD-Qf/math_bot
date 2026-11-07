@@ -31,8 +31,10 @@ class SetupResult:
         gross_outcome: Directional price outcome fraction (informational only).
         cost_impact: Absolute estimated cost from the cost model (informational only).
         state_transitions: Recorded lifecycle transitions.
+        setup_id: Stable per-run setup identifier assigned by the engine (for UIs).
     """
     setup: ABCSetup
+    setup_id: Optional[int] = None
     activated_at: Optional[int] = None
     completed_at: Optional[int] = None
     final_status: SetupStatus = SetupStatus.ACTIVE
@@ -70,6 +72,7 @@ class SetupResult:
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to a JSON-friendly dictionary."""
         return {
+            "setup_id": self.setup_id,
             "direction": self.setup.direction.value,
             "a": self.setup.a.to_dict(),
             "b": self.setup.b.to_dict(),

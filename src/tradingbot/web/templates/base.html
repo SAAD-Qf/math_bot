@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>{% block title %}Research Dashboard{% endblock %} · Mathematical Trading Bot</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="brand" href="/">
+        <span class="brand-mark" aria-hidden="true">∑</span>
+        <span>
+          <strong>Mathematical Trading Bot</strong>
+          <small>research &amp; backtesting only</small>
+        </span>
+      </a>
+      <div class="header-meta">
+        <span class="formula-chip" title="Confirmed formula">{{ formula }}</span>
+        <span class="pill pill-safe">No live trading</span>
+        <span class="muted small">v{{ version }}</span>
+      </div>
+    </div>
+  </header>
+
+  <main id="main" class="wrap">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <p>
+        Research tool. Mathematical target success is <strong>not</strong> profitability.
+        Detection, price projection and invalidation are configurable interpretations;
+        only <code>TARGET = (B + C) / A</code> is confirmed.
+      </p>
+      <p class="muted small">Offline dashboard · no CDN assets · no exchange connectivity</p>
+    </div>
+  </footer>
+
+  <script src="/static/app.js"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

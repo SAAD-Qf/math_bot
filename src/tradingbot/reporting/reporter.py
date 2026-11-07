@@ -250,3 +250,46 @@ class Reporter:
         self.export_to_file(data, paths["csv"], "csv")
         self.export_to_file(data, paths["markdown"], "markdown")
         return paths
+
+    def write_run_index(
+        self,
+        data: Dict[str, Any],
+        base_name: str = "backtest",
+        reports_dir: Optional[str] = None,
+    ) -> str:
+        """Append a compact run entry to ``<reports_dir>/run_index.json``.
+
+        Reports are intentionally overwritten by base name; this index keeps a
+        comparable history of the last 100 runs (dataset, config, key metrics).
+        """
+        out_dir = reports_dir or self.reports_dir
+        os.makedirs(out_dir, exist_ok=True)
+        path = os.path.join(out_dir, "run_index.json")
+        entries: List[Dict[str, Any]] = []
+        if os.path.exists(path):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, list):
+                    entries = loaded
+            except (OSError, ValueError):
+                entries = []
+
+        metrics = data.get("metrics", {})
+        entry = {
+            "run_id": data.get("run_id") or base_name,
+            "base_name": base_name,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "dataset": dict(data.get("dataset", {})),
+            "config": dict(data.get("config", {})),
+            "metrics": {
+                key: metrics[key] for key in self.KEY_METRICS if key in metrics
+            },
+            "setup_count": data.get("setup_count", len(data.get("setup_results", []))),
+            "warning_count": len(data.get("warnings", [])),
+        }
+        entries.append(entry)
+        entries = entries[-100:]
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(entries, f, indent=2, default=str)
+        return path

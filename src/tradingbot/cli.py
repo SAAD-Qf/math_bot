@@ -73,6 +73,9 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common_backtest_args(p_bt)
     p_bt.add_argument("--json", action="store_true", help="Print result summary as JSON")
     p_bt.add_argument(
+        "--charts-dir", default="charts", help="Directory for charts (default: charts)"
+    )
+    p_bt.add_argument(
         "--no-charts", action="store_true", help="Skip chart generation"
     )
 
@@ -90,6 +93,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--charts-dir", default="charts", help="Directory for charts (default: charts)"
     )
     p_rep.add_argument("--base-name", default="backtest", help="Base file name")
+
+    # --- serve -----------------------------------------------------------
+    p_serve = sub.add_parser(
+        "serve",
+        help="Start the local research dashboard (requires the 'web' extra).",
+    )
+    p_serve.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
+    p_serve.add_argument("--port", type=int, default=8000, help="Bind port (default: 8000)")
 
     return parser
 
@@ -137,6 +148,34 @@ def _add_common_backtest_args(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--direction", choices=["both", "long", "short"], default="both",
         help="Restrict detection to one direction (default: both)",
+    )
+    p.add_argument(
+        "--allow-duplicates", action="store_true",
+        help="Drop duplicate timestamps with a warning instead of failing",
+    )
+    p.add_argument(
+        "--fee", type=float, default=0.0,
+        help="Informational fee rate as a fraction of notional (default 0)",
+    )
+    p.add_argument(
+        "--slippage", type=float, default=0.0,
+        help="Informational slippage rate (default 0)",
+    )
+    p.add_argument(
+        "--spread", type=float, default=0.0,
+        help="Informational spread rate (default 0)",
+    )
+    p.add_argument(
+        "--allow-overlapping", action=argparse.BooleanOptionalAction, default=True,
+        help="Allow concurrent same-direction setups (default: true)",
+    )
+    p.add_argument(
+        "--max-active-setups", type=int, default=1000,
+        help="Safety cap on concurrently active setups (default 1000)",
+    )
+    p.add_argument(
+        "--allow-same-candle-activation", action="store_true",
+        help="Opt in to evaluating a setup on its activation candle (default: false)",
     )
 
 
@@ -211,7 +250,7 @@ def cmd_detect(args: argparse.Namespace) -> int:
     from .detection.swing_detector import SwingDetectorConfig
 
     try:
-        provider, report = _load_candles(args.file)
+        provider, report = _load_candles(args.file, args.allow_duplicates)
         candles = provider.get_candles()
     except TradingBotError as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -259,7 +298,7 @@ def _run_backtest_with_options(args: argparse.Namespace):
     from .backtesting.backtest_engine import BacktestConfig, BacktestEngine
     from .strategy.mathematical_strategy import MathematicalStrategy
 
-    provider, report = _load_candles(args.file)
+    provider, report = _load_candles(args.file, args.allow_duplicates)
     candles = provider.get_candles()
 
     config = BacktestConfig(
@@ -267,6 +306,13 @@ def _run_backtest_with_options(args: argparse.Namespace):
         invalidation_rule=args.invalidation,
         max_candles_active=args.max_candles_active,
         target_projection=args.target_projection,
+        allow_overlapping=args.allow_overlapping,
+        allow_same_candle_activation=args.allow_same_candle_activation,
+        max_active_setups=args.max_active_setups,
+        direction=args.direction,
+        fee=args.fee,
+        slippage=args.slippage,
+        spread=args.spread,
     )
     strategy = MathematicalStrategy()
     engine = BacktestEngine(strategy=strategy, config=config)
@@ -299,8 +345,8 @@ def cmd_backtest(args: argparse.Namespace) -> int:
 
     if not args.no_charts:
         try:
-            chart = ChartGenerator(config={"charts_dir": "charts"})
-            provider, _ = _load_candles(args.file)
+            chart = ChartGenerator(config={"charts_dir": args.charts_dir})
+            provider, _ = _load_candles(args.file, args.allow_duplicates)
             candles = provider.get_candles()
             path = chart.generate_backtest_chart(
                 candles, result.setup_results, file_name="backtest"
@@ -327,21 +373,56 @@ def cmd_report(args: argparse.Namespace) -> int:
 
     reporter = Reporter(config={"reports_dir": args.reports_dir})
     paths = reporter.export_all(data, base_name=args.base_name)
-
-    provider, _ = _load_candles(args.file)
-    chart = ChartGenerator(config={"charts_dir": args.charts_dir})
-    chart_path = chart.generate_backtest_chart(
-        provider.get_candles(), result.setup_results, file_name=args.base_name
+    index_path = reporter.write_run_index(
+        data, base_name=args.base_name, reports_dir=args.reports_dir
     )
+
+    chart_path = None
+    try:
+        provider, _ = _load_candles(args.file, args.allow_duplicates)
+        chart = ChartGenerator(config={"charts_dir": args.charts_dir})
+        chart_path = chart.generate_backtest_chart(
+            provider.get_candles(), result.setup_results, file_name=args.base_name
+        )
+    except TradingBotError as e:
+        print(f"  Chart error: {e}", file=sys.stderr)
 
     print("Report generated")
     print(f"  JSON:     {paths['json']}")
     print(f"  CSV:      {paths['csv']}")
     print(f"  Markdown: {paths['markdown']}")
-    print(f"  Chart:    {chart_path}")
+    if chart_path is not None:
+        print(f"  Chart:    {chart_path}")
+    print(f"  Index:    {index_path}")
     print()
     print(f"Setups: {data['setup_count']}, "
           f"target hit rate: {data['metrics']['target_hit_rate_pct']}%")
+    return 0
+
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    """Start the local research dashboard (research-only, local by default)."""
+    try:
+        import uvicorn
+
+        from .web import create_app
+    except ImportError:  # pragma: no cover - depends on optional install
+        print(
+            "Error: the dashboard requires optional dependencies. "
+            'Install with: pip install -e ".[web]"',
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        app = create_app()
+    except RuntimeError as e:  # pragma: no cover - optional install guard
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    print(f"Mathematical Trading Bot dashboard: http://{args.host}:{args.port}")
+    print("Research/backtesting only — no live trading or exchange connectivity.")
+    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
     return 0
 
 
@@ -351,6 +432,7 @@ HANDLERS = {
     "detect": cmd_detect,
     "backtest": cmd_backtest,
     "report": cmd_report,
+    "serve": cmd_serve,
 }
 
 

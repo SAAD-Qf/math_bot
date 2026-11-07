@@ -7,6 +7,8 @@ dist/
 .eggs/
 
 # Environments & secrets
+.venv/
+venv/
 .env
 .env.*
 !.env.example

@@ -35,6 +35,8 @@ Python 3.10+ required.
 pip install -e .
 # development / testing
 pip install -e ".[dev]"
+# local browser dashboard (FastAPI + uvicorn + Jinja2)
+pip install -e ".[web]"
 ```
 
 Optional environment overrides: copy `.env.example` to `.env` and edit.
@@ -49,6 +51,7 @@ python -m tradingbot validate-data --file data/sample/sample.csv
 python -m tradingbot detect --file data/sample/sample_sinus_1h.csv
 python -m tradingbot backtest --file data/sample/sample_sinus_1h.csv
 python -m tradingbot report --file data/sample/sample_sinus_1h.csv
+python -m tradingbot serve --host 127.0.0.1 --port 8000
 ```
 
 `calculate` prints the canonical example exactly:
@@ -71,7 +74,28 @@ Common backtest options (also on `detect`/`report`):
 | `--left-window` / `--right-window` / `--min-separation` | swing sensitivity | 3 / 3 / 1 |
 | `--min-distance` | min price distance between A→B, B→C | 0 |
 | `--max-candles-active` | setup expiry (candles) | 200 |
-| `--direction` | `both` / `long` / `short` (detect only) | `both` |
+| `--direction` | `both` / `long` / `short` | `both` |
+| `--fee` / `--slippage` / `--spread` | informational cost rates | 0 |
+| `--allow-overlapping` | concurrent same-direction setups | true |
+| `--max-active-setups` | concurrent setup cap | 1000 |
+| `--allow-same-candle-activation` | opt in to activation-candle evaluation | false |
+
+## Browser dashboard
+
+The optional dashboard replays bundled historical candles through the same
+`BacktestEngine` used by the CLI, at a speed you control (`1`–`200` candles/s),
+with SSE streaming plus a deterministic state-polling fallback.
+
+```bash
+pip install -e ".[web]"
+python -m tradingbot serve
+# open http://127.0.0.1:8000
+```
+
+It shows live KPIs, every setup state transition, a client-side canvas chart
+with A/B/C markers and target levels, warnings, the assumptions block verbatim,
+and downloadable JSON/CSV/Markdown/PNG artifacts. It is local and offline (no
+CDN assets), and still performs **no live trading and no exchange access**.
 
 ## Historical data format
 
@@ -103,7 +127,8 @@ estimate; there is no execution simulation and no equity curve.
 `reports/backtest.csv`, `reports/backtest.md` and `charts/backtest.png`.
 Reports include dataset info, configuration, detector parameters, evaluator
 and invalidation interpretations, assumptions, per-setup outcomes, metrics,
-warnings and errors — all derived from actual run data.
+warnings and errors — all derived from actual run data. Dashboard runs write
+their artifacts under `reports/web/<run_id>/` (git-ignored).
 
 ## Testing
 

@@ -1,0 +1,263 @@
+{% extends "base.html" %}
+{% block title %}Signal Monitor{% endblock %}
+
+{% block content %}
+<section class="hero">
+  <div>
+    <p class="eyebrow">Historical replay monitor</p>
+    <h1>Watch every signal as it fires.</h1>
+    <p class="lede">
+      Streams bundled historical candles through the real backtest engine at a speed
+      you control. Same evaluation path as the CLI — no invented numbers, no live feed.
+    </p>
+  </div>
+  <div class="formula-card" aria-label="Confirmed formula">
+    <span class="formula-label">Confirmed formula</span>
+    <span class="formula-big">TARGET = <span>(B + C) / A</span></span>
+    <span class="muted small">Example: A=100, B=150, C=125 → 2.75</span>
+  </div>
+</section>
+
+<div class="layout">
+  <aside class="card control-card">
+    <h2>Run configuration</h2>
+    <form id="run-form" autocomplete="off">
+      <div class="field">
+        <label for="dataset">Dataset</label>
+        <select id="dataset" name="dataset" required {% if not datasets %}disabled{% endif %}>
+          {% for d in datasets %}
+          <option value="{{ d.name }}" {% if d.error %}disabled{% endif %}
+            {% if d.name == 'sample_sinus_1h.csv' %}selected{% endif %}>
+            {{ d.name }} · {{ d.candle_count }} candles{% if d.error %} (invalid){% endif %}
+          </option>
+          {% endfor %}
+        </select>
+        {% if not datasets %}
+        <p class="hint warn-text">No bundled CSVs found in <code>data/sample/</code>.</p>
+        {% else %}
+        <p class="hint" id="dataset-hint"></p>
+        {% endif %}
+      </div>
+
+      <fieldset>
+        <legend>Detection <span class="muted small">(reference interpretation)</span></legend>
+        <div class="field-row">
+          <div class="field">
+            <label for="left_window">Left window</label>
+            <input id="left_window" name="left_window" type="number" min="1" max="50" value="3">
+          </div>
+          <div class="field">
+            <label for="right_window">Right window</label>
+            <input id="right_window" name="right_window" type="number" min="1" max="50" value="3">
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="min_separation">Min separation</label>
+            <input id="min_separation" name="min_separation" type="number" min="0" max="500" value="1">
+          </div>
+          <div class="field">
+            <label for="min_distance">Min price distance</label>
+            <input id="min_distance" name="min_distance" type="number" min="0" step="any" value="0">
+          </div>
+        </div>
+        <div class="field">
+          <label for="direction">Direction</label>
+          <select id="direction" name="direction">
+            <option value="both">Both</option>
+            <option value="long">Long only</option>
+            <option value="short">Short only</option>
+          </select>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Evaluation <span class="muted small">(interpretations)</span></legend>
+        <div class="field">
+          <label for="target_mode">Target mode</label>
+          <select id="target_mode" name="target_mode">
+            <option value="high_low_reach">high_low_reach</option>
+            <option value="close_reach">close_reach</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="target_projection">Price projection</label>
+          <select id="target_projection" name="target_projection">
+            <option value="c_anchored_ratio">c_anchored_ratio</option>
+            <option value="identity">identity</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="invalidation_rule">Invalidation</label>
+          <select id="invalidation_rule" name="invalidation_rule">
+            <option value="reference">reference (break through C)</option>
+            <option value="none">none (expiry only)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="max_candles_active">Expiry (active candles)</label>
+          <input id="max_candles_active" name="max_candles_active" type="number" min="1" max="100000" value="200">
+        </div>
+        <label class="check">
+          <input id="allow_overlapping" name="allow_overlapping" type="checkbox" checked>
+          <span>Allow overlapping same-direction setups</span>
+        </label>
+      </fieldset>
+
+      <details class="advanced">
+        <summary>Costs &amp; safety</summary>
+        <div class="field-row">
+          <div class="field">
+            <label for="fee">Fee rate</label>
+            <input id="fee" name="fee" type="number" min="0" max="1" step="any" value="0">
+          </div>
+          <div class="field">
+            <label for="slippage">Slippage</label>
+            <input id="slippage" name="slippage" type="number" min="0" max="1" step="any" value="0">
+          </div>
+          <div class="field">
+            <label for="spread">Spread</label>
+            <input id="spread" name="spread" type="number" min="0" max="1" step="any" value="0">
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="max_active_setups">Max active setups</label>
+            <input id="max_active_setups" name="max_active_setups" type="number" min="1" max="100000" value="1000">
+          </div>
+          <div class="field">
+            <label for="speed">Replay speed</label>
+            <input id="speed" name="speed" type="number" min="1" max="200" step="1" value="10">
+          </div>
+        </div>
+        <label class="check">
+          <input id="allow_same_candle_activation" name="allow_same_candle_activation" type="checkbox">
+          <span>Evaluate on the activation candle <em>(opt-in; breaks the default no-same-candle rule)</em></span>
+        </label>
+        <p class="hint">Costs are informational only and never change target outcomes.</p>
+      </details>
+
+      <div class="actions">
+        <button type="submit" class="btn primary" {% if not datasets %}disabled{% endif %}>
+          Start replay
+        </button>
+        <button type="button" id="instant-btn" class="btn secondary" {% if not datasets %}disabled{% endif %}>
+          Run instant backtest
+        </button>
+      </div>
+      <p class="hint">Replay starts paused. Use Start, Step or the speed slider on the next screen.</p>
+      <p class="form-error" id="form-error" role="alert" hidden></p>
+    </form>
+  </aside>
+
+  <div class="stack">
+    <section class="card">
+      <div class="card-head">
+        <h2>What you get</h2>
+        <span class="pill">one engine path</span>
+      </div>
+      <div class="mini-grid">
+        <div class="mini">
+          <strong>Live KPIs</strong>
+          <span>Hit, invalidation and completion rates computed from the actual setup records.</span>
+        </div>
+        <div class="mini">
+          <strong>Every state change</strong>
+          <span>Pending → active → target reached, invalidated or expired, with timestamps and reasons.</span>
+        </div>
+        <div class="mini">
+          <strong>Price chart</strong>
+          <span>A/B/C markers, dashed target levels and outcome markers drawn client-side.</span>
+        </div>
+        <div class="mini">
+          <strong>Honest assumptions</strong>
+          <span>The report’s assumptions block is rendered verbatim — no invented strategy rules.</span>
+        </div>
+      </div>
+      <div class="lifecycle" aria-label="Setup lifecycle">
+        <span class="status status-pending">pending</span>
+        <span aria-hidden="true">→</span>
+        <span class="status status-active">active</span>
+        <span aria-hidden="true">→</span>
+        <span class="status status-target_reached">target_reached</span>
+        <span class="status status-invalidated">invalidated</span>
+        <span class="status status-expired">expired</span>
+      </div>
+    </section>
+
+    <section class="card" id="calculator">
+      <div class="card-head">
+        <h2>Target calculator</h2>
+        <span class="muted small">confirmed formula only</span>
+      </div>
+      <form id="calc-form" class="inline-form" autocomplete="off">
+        <div class="field"><label for="calc-a">A</label><input id="calc-a" type="number" step="any" min="0.0000001" value="100" required></div>
+        <div class="field"><label for="calc-b">B</label><input id="calc-b" type="number" step="any" min="0.0000001" value="150" required></div>
+        <div class="field"><label for="calc-c">C</label><input id="calc-c" type="number" step="any" min="0.0000001" value="125" required></div>
+        <button class="btn secondary" type="submit">Calculate</button>
+      </form>
+      <pre id="calc-output" class="output" aria-live="polite">A      = 100
+B      = 150
+C      = 125
+B + C  = 275
+TARGET = 2.75</pre>
+    </section>
+
+    <section class="card" id="validation">
+      <div class="card-head">
+        <h2>Dataset validation</h2>
+        <span class="muted small">strict, no silent repair</span>
+      </div>
+      <form id="validate-form" class="inline-form" autocomplete="off">
+        <div class="field grow">
+          <label for="validate-file">Upload CSV (max 20 MB)</label>
+          <input id="validate-file" type="file" accept=".csv,text/csv">
+        </div>
+        <button class="btn secondary" type="submit">Validate upload</button>
+      </form>
+      <p class="hint">The client filename is never used on disk. Required columns:
+        <code>timestamp,open,high,low,close,volume</code>.</p>
+      <div id="validate-result" class="output" aria-live="polite" hidden></div>
+    </section>
+
+    <section class="card" id="history">
+      <div class="card-head">
+        <h2>Run history</h2>
+        <button type="button" class="btn ghost small-btn" id="refresh-history">Refresh</button>
+      </div>
+      <p class="hint">Runs live in memory for this server process (last 50).</p>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Run</th><th>Dataset</th><th>Mode</th><th>Status</th>
+              <th>Setups</th><th>Hit rate</th><th>Created</th>
+            </tr>
+          </thead>
+          <tbody id="run-history-body">
+            <tr><td colspan="7" class="empty">No runs yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card notice">
+      <h2>Research boundary</h2>
+      <p>
+        Only <code>TARGET = (B + C) / A</code> is confirmed. How A/B/C are detected,
+        how the dimensionless target becomes a price level, and when a setup is
+        invalidated are <strong>documented interpretations</strong>, not validated
+        strategy rules. This dashboard does not place orders or connect to an exchange.
+      </p>
+    </section>
+  </div>
+</div>
+
+<script>
+  window.__TB_DATASETS__ = {{ datasets | tojson }};
+</script>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/index.js"></script>
+{% endblock %}

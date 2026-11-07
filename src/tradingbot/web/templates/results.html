@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+{% block title %}Replay {{ run_id }}{% endblock %}
+
+{% block content %}
+<section class="run-head">
+  <div>
+    <p class="eyebrow"><a href="/">← New run</a> · run <code>{{ run_id }}</code></p>
+    <h1 id="run-dataset">Loading run…</h1>
+    <p class="muted" id="run-subtitle">Replaying bundled historical candles through the real engine.</p>
+  </div>
+  <div class="run-status-box">
+    <span class="status" id="run-status">loading</span>
+    <span class="muted small" id="current-candle">—</span>
+    <div class="progress" role="progressbar" aria-label="Replay progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="run-progress">
+      <div class="progress-fill" id="run-progress-bar"></div>
+    </div>
+    <span class="muted small" id="run-progress-text">0 / 0 candles</span>
+  </div>
+</section>
+
+<section class="card controls-card" aria-label="Replay controls">
+  <div class="controls">
+    <button class="btn primary" id="start-btn" type="button">▶ Start</button>
+    <button class="btn secondary" id="pause-btn" type="button">⏸ Pause</button>
+    <button class="btn secondary" id="step-btn" type="button">⏭ Step</button>
+    <button class="btn danger" id="stop-btn" type="button">⏹ Stop</button>
+    <label class="speed-control">
+      <span>Speed <output id="speed-value">10</output> candles/s</span>
+      <input id="speed-range" type="range" min="1" max="200" value="10" step="1">
+    </label>
+  </div>
+  <div class="downloads" id="downloads" aria-label="Artifacts">
+    <span class="muted small">Artifacts:</span>
+    <a class="btn ghost small-btn disabled" id="download-png" href="#" aria-disabled="true">Chart PNG</a>
+    <a class="btn ghost small-btn disabled" id="download-json" href="#" aria-disabled="true">JSON</a>
+    <a class="btn ghost small-btn disabled" id="download-csv" href="#" aria-disabled="true">CSV</a>
+    <a class="btn ghost small-btn disabled" id="download-md" href="#" aria-disabled="true">Markdown</a>
+  </div>
+  <p class="form-error" id="run-error" role="alert" hidden></p>
+</section>
+
+<section class="kpi-strip" aria-label="Live metrics">
+  <div class="kpi"><span class="kpi-label">Total setups</span><strong id="kpi-total">0</strong></div>
+  <div class="kpi"><span class="kpi-label" id="kpi-active-label">Active now</span><strong id="kpi-active">0</strong></div>
+  <div class="kpi"><span class="kpi-label">Target hit rate</span><strong id="kpi-hit">0%</strong></div>
+  <div class="kpi"><span class="kpi-label">Invalidation rate</span><strong id="kpi-invalidation">0%</strong></div>
+  <div class="kpi"><span class="kpi-label">Completion rate</span><strong id="kpi-completion">0%</strong></div>
+  <div class="kpi"><span class="kpi-label">Avg duration</span><strong id="kpi-duration">—</strong></div>
+  <div class="kpi"><span class="kpi-label">Setups / 100 candles</span><strong id="kpi-frequency">0</strong></div>
+</section>
+
+<div class="dashboard-grid">
+  <section class="card chart-panel">
+    <div class="card-head">
+      <h2>Price &amp; signals</h2>
+      <span class="muted small">client-side canvas · server PNG stays the downloadable artifact</span>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="price-chart" height="380" aria-label="Price chart with A, B, C markers, target levels and outcomes"></canvas>
+      <p class="empty" id="chart-empty">Waiting for candles…</p>
+    </div>
+    <div class="chart-legend" aria-hidden="true">
+      <span><i class="dot dot-a"></i>A</span>
+      <span><i class="dot dot-b"></i>B</span>
+      <span><i class="dot dot-c"></i>C</span>
+      <span><i class="line line-target"></i>Price target</span>
+      <span><i class="mark mark-reached">★</i>Reached</span>
+      <span><i class="mark mark-invalidated">✕</i>Invalidated</span>
+      <span><i class="mark mark-expired">◼</i>Expired</span>
+    </div>
+  </section>
+
+  <section class="card signals-panel">
+    <div class="card-head">
+      <h2>Signals <span class="muted small" id="signal-count">(0)</span></h2>
+      <div class="filters">
+        <label class="sr-only" for="filter-direction">Filter direction</label>
+        <select id="filter-direction">
+          <option value="all">All directions</option>
+          <option value="long">Long</option>
+          <option value="short">Short</option>
+        </select>
+        <label class="sr-only" for="filter-status">Filter status</label>
+        <select id="filter-status">
+          <option value="all">All statuses</option>
+          <option value="pending">pending</option>
+          <option value="active">active</option>
+          <option value="target_reached">target_reached</option>
+          <option value="invalidated">invalidated</option>
+          <option value="expired">expired</option>
+        </select>
+      </div>
+    </div>
+    <p class="hint">Click a row for its state-transition timeline and target arithmetic.</p>
+    <div class="table-wrap signals-wrap">
+      <table class="data-table signals-table">
+        <thead>
+          <tr>
+            <th><button type="button" data-sort="setup_id">#</button></th>
+            <th><button type="button" data-sort="direction">Direction</button></th>
+            <th><button type="button" data-sort="a">A</button></th>
+            <th><button type="button" data-sort="b">B</button></th>
+            <th><button type="button" data-sort="c">C</button></th>
+            <th><button type="button" data-sort="target">Target</button></th>
+            <th>Price target</th>
+            <th><button type="button" data-sort="status">Status</button></th>
+            <th><button type="button" data-sort="monitored">Monitored</button></th>
+            <th><button type="button" data-sort="mfe">MFE</button></th>
+            <th><button type="button" data-sort="mae">MAE</button></th>
+            <th>Cost</th>
+          </tr>
+        </thead>
+        <tbody id="signals-body">
+          <tr><td colspan="12" class="empty">No signals yet — press Start or Step.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><h2>Direction breakdown</h2></div>
+    <div class="direction-grid">
+      <div class="direction-block">
+        <h3>Long <span class="status status-long">long</span></h3>
+        <dl id="direction-long" class="metric-list"></dl>
+      </div>
+      <div class="direction-block">
+        <h3>Short <span class="status status-short">short</span></h3>
+        <dl id="direction-short" class="metric-list"></dl>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>Warnings</h2>
+      <span class="muted small" id="warning-count">0</span>
+    </div>
+    <p class="hint">Duplicate suppressions, overlap skips and safety caps, newest first.</p>
+    <ol id="warnings-list" class="warning-list"><li class="empty">None.</li></ol>
+  </section>
+
+  <section class="card assumptions-card">
+    <div class="card-head">
+      <h2>Assumptions in effect</h2>
+      <span class="pill">rendered verbatim</span>
+    </div>
+    <dl id="assumptions-list" class="assumption-list"><dd class="empty">Available when the run finishes.</dd></dl>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><h2>Compare runs</h2></div>
+    <div class="inline-form">
+      <div class="field grow">
+        <label for="compare-a">Run A</label>
+        <select id="compare-a"><option value="">Select a run…</option></select>
+      </div>
+      <div class="field grow">
+        <label for="compare-b">Run B</label>
+        <select id="compare-b"><option value="">Select a run…</option></select>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table class="data-table compare-table" aria-live="polite">
+        <thead><tr><th>Metric</th><th>Run A</th><th>Run B</th></tr></thead>
+        <tbody id="compare-body"><tr><td colspan="3" class="empty">Choose two runs to compare.</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<dialog id="detail-dialog" class="detail-dialog">
+  <form method="dialog" class="dialog-head">
+    <h2 id="detail-title">Signal detail</h2>
+    <button class="btn ghost" aria-label="Close detail">✕</button>
+  </form>
+  <div id="detail-body"></div>
+</dialog>
+
+<script>
+  window.__TB_RUN__ = { runId: {{ run_id | tojson }} };
+  window.__TB_DATASETS__ = [];
+</script>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/chart.js"></script>
+<script src="/static/dashboard.js"></script>
+{% endblock %}

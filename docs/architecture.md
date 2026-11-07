@@ -12,8 +12,11 @@ CSV files ──► data layer ──► backtest engine ──► metrics
                   detection layer│                  ▼
                   (swings, A/B/C)│           reporting layer
                                  │           (JSON/CSV/MD, charts)
-                  strategy layer ┘
+                  strategy layer ┘                  │
                   (pipeline, target, invalidation, costs)
+                                                     ▼
+                                      web layer (optional, local)
+                                      replay/SSE/polling + dashboard
 ```
 
 ## Layers
@@ -57,9 +60,25 @@ interpretation logic lives here.
 
 ### Backtesting (`src/tradingbot/backtesting/`)
 
-* `BacktestEngine` — chronological driver; activates, monitors and closes
-  setups; records transitions; prevents duplicates and look-ahead.
+* `BacktestEngine.iter_run()` — chronological driver yielding one event per
+  candle (candle, detected setups, state changes, warnings, live metrics) and
+  a final `done` event carrying the `BacktestResult`.
+* `BacktestEngine.run()` — a thin aggregation over `iter_run()`, so CLI,
+  reports and the browser replay use exactly one evaluation path.
 * `compute_metrics` — all documented statistics from actual results.
+
+### Web (`src/tradingbot/web/`, optional `web` extra)
+
+* `service.RunRegistry` — the only web module touching data loading, the
+  engine, reporters or charts. Holds at most 50 in-memory runs, enforces a
+  20 MB upload limit and a 20,000-candle web limit, and resolves dataset names
+  strictly inside `data/sample`.
+* `app.create_app()` — FastAPI page/API/SSE routes, JSON error handlers and a
+  local-only default bind (`127.0.0.1`).
+* Templates + vanilla JS/CSS — no build step, no CDN, offline. The server
+  renders truth; the browser formats events and draws a `<canvas>` chart.
+* Replay controls (`start/pause/step/stop/speed`) are gated server-side;
+  `GET /api/runs/{id}/state` is the deterministic polling fallback to SSE.
 
 ### Data (`src/tradingbot/data/`)
 
@@ -74,7 +93,8 @@ interpretation logic lives here.
 
 ### Infrastructure
 
-* `config.py` — dataclass configuration from environment variables.
+* `config.py` — environment/logging configuration only; run parameters have a
+  single source of truth in `BacktestConfig`.
 * `logging.py` — configurable logging with rotation.
 * `exceptions.py` — single `TradingBotError` hierarchy.
 * `cli.py` / `__main__.py` — argparse CLI (`python -m tradingbot`).

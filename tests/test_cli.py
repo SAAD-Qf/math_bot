@@ -4,10 +4,26 @@ CLI tests: help, calculate, validate-data, detect, backtest, report.
 
 import json
 import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
 from tradingbot.cli import main
+from tradingbot.exceptions import TradingBotError
+from tradingbot.reporting import charts as chart_module
+
+
+def test_module_entrypoint_version():
+    completed = subprocess.run(
+        [sys.executable, "-m", "tradingbot", "--version"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0
+    assert "tradingbot" in completed.stdout
 
 
 def test_help_lists_commands(capsys):
@@ -119,3 +135,54 @@ def test_backtest_chart_generated(big_sample_csv, tmp_path, monkeypatch):
     rc = main(["backtest", "--file", big_sample_csv])
     assert rc == 0
     assert os.path.exists("charts/backtest.png")
+
+
+def test_backtest_exposes_cost_and_engine_flags(big_sample_csv, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    rc = main([
+        "backtest", "--file", big_sample_csv,
+        "--fee", "0.001", "--slippage", "0.0005", "--spread", "0.0002",
+        "--no-allow-overlapping", "--max-active-setups", "5",
+        "--allow-same-candle-activation", "--direction", "long",
+        "--charts-dir", "custom-charts",
+    ])
+    assert rc == 0
+    assert os.path.exists(os.path.join("custom-charts", "backtest.png"))
+
+
+def test_allow_duplicates_flag_on_backtest(sample_csv, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    lines = Path(sample_csv).read_text(encoding="utf-8").splitlines()
+    duplicate = tmp_path / "duplicate.csv"
+    duplicate.write_text(
+        "\n".join([lines[0], lines[1], lines[1], lines[2], lines[3]]) + "\n",
+        encoding="utf-8",
+    )
+
+    assert main(["backtest", "--file", str(duplicate), "--no-charts"]) == 1
+    assert main([
+        "backtest", "--file", str(duplicate), "--allow-duplicates", "--no-charts"
+    ]) == 0
+
+
+def test_report_chart_failure_is_clean_and_writes_index(
+    big_sample_csv, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.chdir(tmp_path)
+
+    def boom(*args, **kwargs):
+        raise TradingBotError("chart unavailable")
+
+    monkeypatch.setattr(chart_module.ChartGenerator, "generate_backtest_chart", boom)
+    rc = main([
+        "report", "--file", big_sample_csv,
+        "--reports-dir", "reports", "--charts-dir", "charts",
+    ])
+    assert rc == 0
+    assert "Chart error: chart unavailable" in capsys.readouterr().err
+    assert os.path.exists("reports/backtest.json")
+
+    index = json.loads(Path("reports/run_index.json").read_text(encoding="utf-8"))
+    assert len(index) == 1
+    assert index[0]["base_name"] == "backtest"
+    assert "total_setups" in index[0]["metrics"]

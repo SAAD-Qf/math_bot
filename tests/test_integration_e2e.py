@@ -147,3 +147,22 @@ def test_determinism_same_inputs_same_outputs():
     for a, b in zip(r1.setup_results, r2.setup_results, strict=False):
         assert a.target == b.target
         assert a.final_status == b.final_status
+
+
+def test_strategy_batch_api_and_setup_validation():
+    """The Phase 0 Strategy interface still works through MathematicalStrategy."""
+    from conftest import zigzag_candles
+
+    candles = zigzag_candles(
+        [(1, 6, 1.0), (-1, 6, 1.0), (1, 6, 1.0), (-1, 6, 1.0), (1, 8, 1.5)]
+    )
+    strategy = MathematicalStrategy()
+    setup = strategy.analyze(candles)
+    assert setup is not None
+    assert strategy.validate_setup(setup) is True
+    assert strategy.is_compatible(candles) is True
+    assert strategy.compute_price_target(setup) > 0
+    target_point = strategy.calculate_target(setup)
+    assert target_point.value == setup.target
+    assert "formula" in target_point.metadata
+    assert strategy.describe()["formula"] == "(B + C) / A"

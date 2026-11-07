@@ -11,7 +11,7 @@ checks also start at the next candle after activation.
 
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 from ..domain import (
     ABCSetup,
@@ -56,6 +56,7 @@ class BacktestConfig:
             price level: "c_anchored_ratio" (reference interpretation) or
             "identity".
         max_active_setups: safety cap on concurrently active setups.
+        direction: "both", "long" or "short"; filters detected setups.
     """
     target_mode: Any = "high_low_reach"
     invalidation_rule: str = "reference"
@@ -67,6 +68,7 @@ class BacktestConfig:
     spread: float = 0.0
     target_projection: str = "c_anchored_ratio"
     max_active_setups: int = 1000
+    direction: str = "both"
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -80,6 +82,7 @@ class BacktestConfig:
             "spread": self.spread,
             "target_projection": self.target_projection,
             "max_active_setups": self.max_active_setups,
+            "direction": self.direction,
         }
 
 
@@ -131,8 +134,47 @@ class BacktestEngine:
     def run(self, candles: List[Candle]) -> BacktestResult:
         """Run the backtest over a chronological candle list.
 
+        This is a thin aggregation over :meth:`iter_run`, so instant backtests
+        and the browser replay share exactly one evaluation path.
+
         Raises:
             BacktestError: on invalid input data.
+        """
+        final: Optional[BacktestResult] = None
+        for event in self.iter_run(candles):
+            if event["type"] == "done":
+                final = event["result"]
+        if final is None:  # defensive: iter_run always ends with a done event
+            raise BacktestError("Backtest did not produce a result")
+        return final
+
+    def iter_run(
+        self, candles: List[Candle], include_live_metrics: bool = True
+    ) -> Iterator[Dict[str, Any]]:
+        """Run the backtest and yield one event per candle, then a done event.
+
+        Event shape (one per candle, ``seq == candle index``)::
+
+            {
+              "type": "candle", "seq": i, "index": i,
+              "candle": {...OHLCV...},
+              "detected": [setup dicts created at this candle],
+              "state_changes": [{"setup_id", "previous_status", "status",
+                                 "reason", "timestamp", "setup": {...}}],
+              "warnings": [messages emitted at this candle],
+              "metrics": {...current metrics...},
+              "active_count": n,
+              "progress": {"index", "total", "pct"},
+            }
+
+        The final event is ``{"type": "done", "seq": len(candles),
+        "result": BacktestResult, "metrics": ...}``. The ``result`` is the
+        actual domain object (not serialized) so ``run()`` can return it
+        directly without duplicating aggregation logic.
+
+        ``include_live_metrics`` computes partial metrics per candle for live
+        dashboards; it can be disabled for bulk runs that only need the final
+        result.
         """
         import time
 
@@ -146,27 +188,41 @@ class BacktestEngine:
                 "Candles must be sorted chronologically (ascending timestamps)"
             )
 
+        from ..backtesting.metrics import compute_metrics
+
         start_time = time.monotonic()
         self.strategy.reset()
+        self._next_setup_id = 1
 
         setup_results: List[SetupResult] = []
         active: List[SetupResult] = []
         warnings: List[str] = []
         errors: List[str] = []
+        total = len(candles)
 
         for i, candle in enumerate(candles):
+            state_changes: List[Dict[str, Any]] = []
+
             # --- 1. Update active setups with the CURRENT candle ------------
             still_active: List[SetupResult] = []
             for result in active:
+                previous = result.final_status
                 self._evaluate_active_setup(result, candle, i)
                 if result.is_terminal():
                     setup_results.append(result)
+                    state_changes.append(self._state_change_event(result, previous))
                 else:
                     still_active.append(result)
             active = still_active
 
             # --- 2. Feed the candle to the detector --------------------------
             new_setups = self.strategy.feed(candle)
+            if str(self.config.direction).lower() in {"long", "short"}:
+                new_setups = [
+                    s for s in new_setups
+                    if s.direction.value == str(self.config.direction).lower()
+                ]
+            candle_warnings: List[str] = []
 
             for setup in new_setups:
                 # Duplicate prevention at engine level: a (direction, C value,
@@ -183,7 +239,7 @@ class BacktestEngine:
                     (r.setup.direction.value, str(r.setup.c.value), r.setup.c.timestamp) == key
                     for r in active
                 ):
-                    warnings.append(
+                    candle_warnings.append(
                         f"Candle {i}: duplicate setup suppressed "
                         f"({key[0]} C={key[1]}@{key[2]})"
                     )
@@ -191,24 +247,56 @@ class BacktestEngine:
                 elif not self.config.allow_overlapping and any(
                     r.setup.direction == setup.direction for r in active
                 ):
-                    warnings.append(
+                    candle_warnings.append(
                         f"Candle {i}: setup skipped due to overlap policy "
                         f"({setup.direction.value})"
                     )
                 elif len(active) >= self.config.max_active_setups:
-                    warnings.append(f"Candle {i}: max_active_setups reached; setup skipped")
+                    candle_warnings.append(
+                        f"Candle {i}: max_active_setups reached; setup skipped"
+                    )
                 else:
                     result = self._activate(setup, candle, i)
-                    active.append(result)
+                    state_changes.append(
+                        self._state_change_event(result, SetupStatus.PENDING)
+                    )
+                    # Explicit opt-in only: evaluate the activation candle too.
+                    # Default False keeps the no-look-ahead contract intact.
+                    if self.config.allow_same_candle_activation:
+                        self._evaluate_active_setup(result, candle, i)
+                    if result.is_terminal():
+                        setup_results.append(result)
+                        state_changes.append(
+                            self._state_change_event(result, SetupStatus.ACTIVE)
+                        )
+                    else:
+                        active.append(result)
+
+            warnings.extend(candle_warnings)
+
+            yield {
+                "type": "candle",
+                "seq": i,
+                "index": i,
+                "candle": candle.to_dict(),
+                "detected": [s.to_dict() for s in new_setups],
+                "state_changes": state_changes,
+                "warnings": candle_warnings,
+                "metrics": compute_metrics(setup_results + active, candles[: i + 1])
+                if include_live_metrics else None,
+                "active_count": len(active),
+                "progress": {
+                    "index": i + 1,
+                    "total": total,
+                    "pct": round((i + 1) / total * 100.0, 2),
+                },
+            }
 
         # Remaining active setups at the end of data: still ACTIVE (not counted
         # as terminal outcomes); include them for transparency.
         setup_results.extend(active)
 
         duration_ms = int((time.monotonic() - start_time) * 1000)
-
-        from ..backtesting.metrics import compute_metrics
-
         metrics = compute_metrics(setup_results, candles)
 
         assumptions = {
@@ -218,12 +306,12 @@ class BacktestEngine:
             "invalidation": self.invalidation_rule.describe(),
             "cost_model": self.cost_model.describe(),
             "activation_rule": (
-                "Setups activate on the candle AFTER C-confirmation "
-                "(no same-candle evaluation by default)."
+                "Setups are first evaluated on the candle AFTER C-confirmation "
+                "unless allow_same_candle_activation is explicitly enabled."
             ),
         }
 
-        return BacktestResult(
+        final_result = BacktestResult(
             dataset={
                 "candle_count": len(candles),
                 "first_timestamp": candles[0].timestamp,
@@ -237,6 +325,30 @@ class BacktestEngine:
             assumptions=assumptions,
             duration_ms=duration_ms,
         )
+        yield {
+            "type": "done",
+            "seq": total,
+            "result": final_result,
+            "metrics": metrics,
+            "progress": {"index": total, "total": total, "pct": 100.0},
+        }
+
+    @staticmethod
+    def _state_change_event(
+        result: SetupResult, previous: SetupStatus
+    ) -> Dict[str, Any]:
+        """Build a JSON-friendly update for one setup lifecycle change."""
+        transition = result.state_transitions[-1] if result.state_transitions else None
+        return {
+            "setup_id": result.setup_id,
+            "previous_status": previous.value,
+            "status": result.final_status.value,
+            "target_status": result.target_status.value,
+            "reason": transition.reason if transition is not None else "",
+            "timestamp": transition.timestamp if transition is not None else None,
+            "candle_index": transition.candle_index if transition is not None else None,
+            "setup": result.to_dict(),
+        }
 
     # ------------------------------------------------------------------
     # Setup lifecycle
@@ -245,12 +357,14 @@ class BacktestEngine:
         """Activate a newly created setup and record the transition."""
         result = SetupResult(
             setup=setup,
+            setup_id=self._next_setup_id,
             activated_at=activation_candle.timestamp,
             final_status=SetupStatus.ACTIVE,
             target_status=TargetStatus.PENDING,
             invalidation_status=InvalidationStatus.NONE,
             target=setup.target,
         )
+        self._next_setup_id += 1
         result.state_transitions.append(
             StateTransition(
                 timestamp=activation_candle.timestamp,
